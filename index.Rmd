@@ -1,0 +1,84 @@
+---
+title: "Predicting Weight Lifting Exercise Quality"
+author: "Hannu Kivimäki"
+date: "2016-04-02"
+output:
+   html_document:
+      toc: true
+      toc_depth: 4
+      theme: readable
+---
+<style type="text/css">
+/* Reduce title font size. */
+h1.title { font-size: 1.6em; }
+
+/* Reduce pre block line height to normal. */
+div pre {
+  line-height: normal;
+}
+
+/* Enable page breaks for printing. */
+@media all {
+    .page-break	{ display: none; }
+}
+@media print {
+    .page-break	{ display: block; page-break-before: always; }
+    a[href]:after { content: none !important; }
+}
+</style>
+
+### Synopsis
+Activity trackers such as Nike FuelBand, Microsoft Band or Polar Loop are used
+by people interested in measuring their overall physical activity and training
+performance. However, while the amount of activity is quite easily measured,
+the quality if often neglected.
+
+In this report we present an example of how to use machine learning to predict how
+well a basic weight lifting exercise was executed, based on sensor data from
+six participants with accelerometers attached on the belt, forearm, arm and
+dumbbell (the weight). We cover the prediction model building process, cross
+validation steps and error rates. Finally, we use the model to classify
+twenty test cases.
+
+### Data Processing
+```{r readcsv, echo = FALSE}
+testing  <- read.csv("pml-testing.csv")
+training <- read.csv("pml-training.csv")
+```
+The original weight lifting exercises dataset [1] was split into a training set
+of `r nrow(training)` observations and a testing set of `r nrow(testing)`
+observations. The data had `r ncol(training)` variables.
+
+The first step in cleaning the data was to remove variables for which all the 
+values were missing in the testing data set, as these would have been useless
+for modelling. Additionally, columns 1-7 containing metadata such as name
+of the person and timestamps were removed:
+
+```{r validcols, echo = TRUE}
+validCols <- colSums(is.na(testing)) != nrow(testing) # remove N/A columns
+validCols[1:7] <- FALSE                               # remove names, timestamps etc.
+training <- training[, validCols]
+testing  <- testing[, validCols]
+```
+
+After pruning the data had `r ncol(training)` variables - measurements from
+gyroscopes and accelerometers, with additional characteristics such minimum
+and maximum values, standard deviations and variances. No values were missing,
+i.e. no imputation was necessary.
+
+For testing data, the last column (_problem\_id_) provides an ID for each case.
+In the training data set, the last column (_classe_) describes how the
+_Unilateral Dumbbell Biceps Curl_ weight exercise was actually performed:
+
+ * Class A: exactly according to the specification
+ * Class B: throwing the elbows to the front
+ * Class C: lifting the dumbbell only halfway
+ * Class D: lowering the dumbbell only halfway
+ * Class E: throwing the hips to the front
+
+Classes B-E represent common problems in the exercise. The goal is to use the
+measurement data to recognize the correct class for each observed case.
+
+### References
+[1]  _Weight Lifting Exercises Dataset_ (http://groupware.les.inf.puc-rio.br/har)
+
