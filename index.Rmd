@@ -1,7 +1,7 @@
 ---
-title: "Predicting Weight Lifting Exercise Quality"
+title: "Predicting Weight Lifting Exercise Performance"
 author: "Hannu Kivimäki"
-date: "2016-04-02"
+date: "2016-04-03"
 output:
    html_document:
       toc: true
@@ -27,47 +27,55 @@ div pre {
 }
 </style>
 
+```{r loadlibraries, echo = FALSE, message = FALSE, warning = FALSE}
+library(caret)
+library(randomForest)
+library(knitr)
+```
+
 ### Synopsis
 Activity trackers such as Nike FuelBand, Microsoft Band or Polar Loop are used
 by people interested in measuring their overall physical activity and training
-performance. However, while the amount of activity is quite easily measured,
-the quality if often neglected.
+performance. While the amount of activity is quite easily measured, the quality
+is often neglected.
 
-In this report we present an example of how to use machine learning to predict how
-well a basic weight lifting exercise was executed, based on sensor data from
+In this report we present an example of how to use machine learning to predict
+how well a basic weight lifting exercise was executed, based on sensor data from
 six participants with accelerometers attached on the belt, forearm, arm and
-dumbbell (the weight). We cover the prediction model building process, cross
-validation steps and error rates. Finally, we use the model to classify
-twenty test cases.
+dumbbell (the weight). We cover the data pruning and prediction model fitting
+processes and use the model to classify twenty test cases.
 
 ### Data Processing
-```{r readcsv, echo = FALSE}
+For the purposes of this machine learning assignment, the original weight
+lifting exercises data [1] was provided as two subsets:
+
+```{r readcsv, echo = TRUE, cache = TRUE}
 testing  <- read.csv("pml-testing.csv")
 training <- read.csv("pml-training.csv")
 ```
-The original weight lifting exercises dataset [1] was split into a training set
-of `r nrow(training)` observations and a testing set of `r nrow(testing)`
-observations. The data had `r ncol(training)` variables.
+
+The given training set had `r nrow(training)` observations and the testing set
+`r nrow(testing)` observations. The data had `r ncol(training)` variables.
 
 The first step in cleaning the data was to remove variables for which all the 
-values were missing in the testing data set, as these would have been useless
-for modelling. Additionally, columns 1-7 containing metadata such as name
+values were missing in the testing data set, as these would have been impossible
+to use for predictions. Additionally, columns 1-7 containing metadata such as name
 of the person and timestamps were removed:
 
-```{r validcols, echo = TRUE}
+```{r validcols, echo = TRUE, cache = TRUE}
 validCols <- colSums(is.na(testing)) != nrow(testing) # remove N/A columns
 validCols[1:7] <- FALSE                               # remove names, timestamps etc.
 training <- training[, validCols]
 testing  <- testing[, validCols]
 ```
 
-After pruning the data had `r ncol(training)` variables - measurements from
+After pruning the data had `r ncol(training)` variables left - measurements from
 gyroscopes and accelerometers, with additional characteristics such minimum
-and maximum values, standard deviations and variances. No values were missing,
-i.e. no imputation was necessary.
+and maximum values, standard deviations and variances. No values were missing
+in either subsets, i.e. no imputation was needed.
 
-For testing data, the last column (_problem\_id_) provides an ID for each case.
-In the training data set, the last column (_classe_) describes how the
+For testing data, the last 53rd column (_problem\_id_) provides an ID for each
+case. In the training data set, the last column (_classe_) describes how the
 _Unilateral Dumbbell Biceps Curl_ weight exercise was actually performed:
 
  * Class A: exactly according to the specification
@@ -76,9 +84,106 @@ _Unilateral Dumbbell Biceps Curl_ weight exercise was actually performed:
  * Class D: lowering the dumbbell only halfway
  * Class E: throwing the hips to the front
 
-Classes B-E represent common problems in the exercise. The goal is to use the
-measurement data to recognize the correct class for each observed case.
+Classes B-E represent common problems in the exercise. The classes are defined
+in the paper [2] by Velloso et al. The goal is to use the sensor measurement
+data to recognize the performance class for each observed case.
+
+### Fitting a Model
+Since the outcome variable is a factor with multiple categories (class A-E),
+a tree-based approach is better than linear models. Furthermore, as the
+training set is fairly large with thousands of observations, we can use
+cross-validation for feature selection.
+
+Random forests is an accurate machine learning technique for classification
+tasks. However a model with all `r ncol(training) - 1` weight lifting
+exercise variables would be very complex and possibly impractically slow
+for making predictions on new data. To simplify the model, we use
+cross-validation to narrow the selection of features to just the most
+important ones:
+
+```{r rfcv, echo = TRUE, cache = TRUE, results = 'hide'}
+set.seed(1234)
+rftest <- rfcv(training[, -53], training$classe, cv.fold = 10,
+               scale = "log", step = 0.75)
+rftest$error.cv
+```
+
+*rfcv()* starts with all predictors, splits the the training data using 10-fold
+cross-validation and calculates the average prediction error rate. It then
+preserves 75% of most important predictors (53 &rarr; 39) and starts the process
+again. The process is repeated until there is just one predictor left.
+
+The result shows that with just nine predictors the cross-validated classification
+error rate stays below one percent (`r round(rftest$error.cv["9"], 3)`).
+Adding more variables would have very little impact, other than causing
+overfitting:
+
+<div style="width:90%; padding-left: 50px;">
+```{r rfcvtable, echo = FALSE}
+kable(t(data.frame(rftest$error.cv)), digits = 3, row.names = F,
+      caption = "Number of Predictors vs. Cross-validated Error Rate")
+```
+
+</div>
+
+To find out which nine variables should be included in the model, we run the
+random forest algorithm once with all `r ncol(training) - 1` predictors,
+calculate the importance measure for each variable and choose top 9:
+
+```{r importance, echo = TRUE, cache = TRUE}
+fit52 <- train(classe ~ ., data = training, method = "rf")
+top9  <- order(fit52$finalModel$importance, decreasing = T)[1:9]
+
+```
+<div style="width:90%; padding-left: 50px;">
+```{r importancetable, echo = FALSE}
+kable(fit52$finalModel$importance[top9,, drop = F], digits = 2, row.names = T,
+      caption = "Top 9 Weigth Lifting Exercise Performance Predictors")
+```
+
+</div>
+
+This leaves us the predictors to use in the final model.
+
+### Final Model
+After finding the most important predictors, we are ready to fit our final
+random forests model:
+
+```{r finalfit, echo = TRUE, cache = TRUE}
+fmla <- as.formula(paste("classe ~ ",
+                         paste(colnames(training)[top9], collapse = " + ")))
+fit9 <- train(fmla, data = training, method = "rf")
+```
+
+Notice that we use the entire training set in the fitting process, without
+diving the data further to training and validation subsets. This is intentional,
+as _"in random forests, there is no need for cross-validation or a separate test
+set to get an unbiased estimate of the test set error."_ [3].
+
+```{r finalmodel, echo = TRUE}
+fit9$finalModel
+
+```
+```{r ooberror, echo = FALSE}
+# https://github.com/cran/randomForest/blob/master/R/print.randomForest.R
+ooberr <- round(fit9$finalModel$err.rate[fit9$finalModel$ntree, "OOB"] * 100,
+                digits = 2)
+```
+
+The reported out-of-bag (OOB) error rate `r ooberr`% is an estimate for our
+model's out of sample error.
+
+### Predicting Performance Classes
+Once the final model has been built, it can be applied to predict the performance
+class A-E for the the weight lifting exercise testing data set observations:
+```{r predict, echo = TRUE}
+predict(fit9, newdata = testing)
+```
+
 
 ### References
 [1]  _Weight Lifting Exercises Dataset_ (http://groupware.les.inf.puc-rio.br/har)
 
+[2]  _Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. QualitativeActivity Recognition of Weight Lifting Exercises. Proceedings of 4th Augmented Human (AH) International Conference in cooperation with ACM SIGCHI (Augmented Human'13) . Stuttgart, Germany: ACM SIGCHI, 2013._  (http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201)
+
+[3]  _Leo Breiman and Adele Cutler: Random Forests, The out-of-bag (oob) error estimate_ (http://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#ooberr)
